@@ -33,11 +33,11 @@ interface CalendarDay {
     <div class="calendar-container mat-elevation-z4">
       <div class="calendar-header">
         <div class="month-navigation">
-          <button mat-icon-button (click)="previousMonth()" matTooltip="Previous Month">
+          <button mat-icon-button (click)="previousMonth()" matTooltip="Previous Month" class="nav-button">
             <mat-icon>chevron_left</mat-icon>
           </button>
           <h2>{{ currentDate | date:'MMMM yyyy' }}</h2>
-          <button mat-icon-button (click)="nextMonth()" matTooltip="Next Month">
+          <button mat-icon-button (click)="nextMonth()" matTooltip="Next Month" class="nav-button">
             <mat-icon>chevron_right</mat-icon>
           </button>
         </div>
@@ -129,15 +129,20 @@ interface CalendarDay {
       height: calc(100% - 48px);
       background: white;
       border-radius: 8px;
-      overflow: hidden;
+      overflow: auto;
       display: flex;
       flex-direction: column;
+      max-height: calc(100vh - 96px);
     }
 
     .calendar-header {
       padding: 16px;
       background: #1976d2;
       color: white;
+      position: sticky;
+      top: 0;
+      z-index: 10;
+      box-shadow: 0 2px 4px rgba(0,0,0,0.1);
     }
 
     .month-navigation {
@@ -147,13 +152,22 @@ interface CalendarDay {
       margin-bottom: 16px;
 
       h2 {
-        margin: 0 16px;
+        margin: 0 24px;
         font-size: 24px;
-        font-weight: 400;
+        font-weight: 500;
+        min-width: 200px;
+        text-align: center;
       }
 
-      button {
+      .nav-button {
         color: white;
+        background: rgba(255,255,255,0.1);
+        transition: all 0.2s ease;
+
+        &:hover {
+          background: rgba(255,255,255,0.2);
+          transform: scale(1.1);
+        }
       }
     }
 
@@ -173,11 +187,12 @@ interface CalendarDay {
 
     .calendar-grid {
       display: grid;
-      grid-template-columns: repeat(7, 1fr);
+      grid-template-columns: repeat(7, minmax(150px, 1fr));
       gap: 1px;
       background: #e0e0e0;
       flex: 1;
       min-height: 0;
+      min-width: fit-content;
     }
 
     .day-cell {
@@ -258,6 +273,7 @@ interface CalendarDay {
       align-items: center;
       font-size: 0.9em;
       border: 1px solid #e0e0e0;
+      user-select: none;
 
       &:hover {
         box-shadow: 0 2px 4px rgba(0,0,0,0.1);
@@ -267,6 +283,31 @@ interface CalendarDay {
           opacity: 1;
         }
       }
+
+      &.cdk-drag-preview {
+        box-shadow: 0 4px 8px rgba(0,0,0,0.1);
+        transform: scale(1.05);
+        background: white;
+      }
+
+      &.cdk-drag-placeholder {
+        opacity: 0.3;
+        background: #e3f2fd;
+        border: 2px dashed #1976d2;
+      }
+
+      &.cdk-drag-animating {
+        transition: transform 250ms ease;
+      }
+    }
+
+    .cdk-drop-list-dragging .appointment-card:not(.cdk-drag-placeholder) {
+      transition: transform 250ms ease;
+    }
+
+    .cdk-drop-list-receiving {
+      background-color: #e3f2fd !important;
+      transition: background-color 250ms ease;
     }
 
     .appointment-content {
@@ -361,24 +402,114 @@ export class CalendarComponent implements OnInit {
   }
 
   previousMonth() {
-    this.currentDate.setMonth(this.currentDate.getMonth() - 1);
+    this.currentDate = new Date(this.currentDate.getFullYear(), this.currentDate.getMonth() - 1, 1);
     this.generateCalendarDays();
   }
 
   nextMonth() {
-    this.currentDate.setMonth(this.currentDate.getMonth() + 1);
+    this.currentDate = new Date(this.currentDate.getFullYear(), this.currentDate.getMonth() + 1, 1);
     this.generateCalendarDays();
   }
 
-  onDrop(event: CdkDragDrop<any[]>, targetDate: Date) {
-    if (event.previousContainer === event.container) {
-      return;
-    }
+  private calculateNewTime(items: any[], newIndex: number, currentDate: Date): Date {
+    const BUSINESS_START = 9; // 9 AM
+    const BUSINESS_END = 18; // 6 PM
+    const MIN_GAP = 15; // minutes
+    const DEFAULT_DURATION = 30; // minutes
+    const newTime = new Date(currentDate);
     
+    // Function to check if a time is within business hours
+    const isWithinBusinessHours = (time: Date): boolean => {
+      const hours = time.getHours();
+      return hours >= BUSINESS_START && hours < BUSINESS_END;
+    };
+
+    // Function to find the next available time slot
+    const findNextAvailableSlot = (startTime: Date, items: any[]): Date => {
+      let candidateTime = new Date(startTime);
+      
+      // Ensure we start within business hours
+      if (!isWithinBusinessHours(candidateTime)) {
+        candidateTime.setHours(BUSINESS_START, 0, 0, 0);
+        if (candidateTime < startTime) {
+          candidateTime.setDate(candidateTime.getDate() + 1);
+        }
+      }
+
+      // Check each existing appointment for conflicts
+      for (const item of items) {
+        const appointmentTime = new Date(item.date);
+        if (Math.abs(appointmentTime.getTime() - candidateTime.getTime()) < MIN_GAP * 60000) {
+          candidateTime = new Date(appointmentTime);
+          candidateTime.setMinutes(candidateTime.getMinutes() + DEFAULT_DURATION);
+          
+          // If we've gone past business hours, move to next day
+          if (!isWithinBusinessHours(candidateTime)) {
+            candidateTime.setDate(candidateTime.getDate() + 1);
+            candidateTime.setHours(BUSINESS_START, 0, 0, 0);
+          }
+        }
+      }
+      
+      return candidateTime;
+    };
+
+    if (newIndex === 0) {
+      // If dropped at the start, try to keep original time if within business hours
+      if (isWithinBusinessHours(newTime)) {
+        return newTime;
+      }
+      newTime.setHours(BUSINESS_START, 0, 0, 0);
+      return findNextAvailableSlot(newTime, items);
+    }
+
+    if (newIndex >= items.length) {
+      // If dropped at the end, place after the last item
+      const lastItem = items[items.length - 1];
+      const afterLastItem = new Date(lastItem.date);
+      afterLastItem.setMinutes(afterLastItem.getMinutes() + DEFAULT_DURATION);
+      return findNextAvailableSlot(afterLastItem, items);
+    }
+
+    // If dropped between items, try to fit it in the gap
+    const prevItem = items[newIndex - 1];
+    const nextItem = items[newIndex];
+    const prevTime = new Date(prevItem.date);
+    const nextTime = new Date(nextItem.date);
+    const gap = (nextTime.getTime() - prevTime.getTime()) / 60000; // gap in minutes
+
+    if (gap >= DEFAULT_DURATION + (2 * MIN_GAP)) {
+      // If there's enough gap, place it in the middle
+      const midTime = new Date(prevTime.getTime() + (gap / 2) * 60000);
+      return findNextAvailableSlot(midTime, items.filter(item => 
+        item.id !== prevItem.id && item.id !== nextItem.id
+      ));
+    }
+
+    // If no good spot found, add it after the previous item
+    const afterPrevItem = new Date(prevTime);
+    afterPrevItem.setMinutes(afterPrevItem.getMinutes() + DEFAULT_DURATION);
+    return findNextAvailableSlot(afterPrevItem, items);
+  }
+
+  onDrop(event: CdkDragDrop<any[]>, targetDate: Date) {
     const appointment = event.item.data;
     const newDate = new Date(targetDate);
     newDate.setHours(appointment.date.getHours());
     newDate.setMinutes(appointment.date.getMinutes());
+    
+    if (event.previousContainer === event.container) {
+      // Reorder within the same day
+      const items = event.container.data;
+      const newIndex = event.currentIndex;
+      const oldIndex = items.findIndex(item => item.id === appointment.id);
+      
+      if (oldIndex !== newIndex) {
+        const newTime = this.calculateNewTime(items, newIndex, appointment.date);
+        newDate.setHours(newTime.getHours());
+        newDate.setMinutes(newTime.getMinutes());
+      }
+    }
     
     this.appointmentService.updateAppointment({
       ...appointment,
@@ -396,7 +527,9 @@ export class CalendarComponent implements OnInit {
 
   openAppointmentForm(date?: Date, appointment?: any) {
     this.dialog.open(AppointmentFormComponent, {
-      width: '400px',
+      width: '360px',
+      maxHeight: '80vh',
+      panelClass: 'appointment-dialog',
       data: {
         appointment,
         selectedDate: date
